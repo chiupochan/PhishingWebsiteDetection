@@ -33,8 +33,8 @@ except Exception as e:
     st.stop()
 
 # Model Paths
-MODEL_PATH = 'models/CNN-BiLSTM.h5'
-TOKENIZER_PATH = 'dataset/tokenizer.pkl'
+MODEL_PATH = 'Models/CNN-BiLSTM.h5'
+TOKENIZER_PATH = 'Dataset/tokenizer.pkl'
 MAX_LEN = 200
 
 # --- Helper Functions ---

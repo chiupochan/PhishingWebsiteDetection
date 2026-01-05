@@ -3,7 +3,7 @@ import tensorflow as tf
 import pickle
 import os
 import re
-import pandas as pd  # Added pandas for CSV handling
+import pandas as pd
 from datetime import datetime
 from pymongo import MongoClient
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -33,7 +33,7 @@ except Exception as e:
 # File Paths
 MODEL_PATH = 'Models/CNN-BiLSTM.h5'
 TOKENIZER_PATH = 'Dataset/tokenizer.pkl'
-DATA_PATH = 'Dataset/processed_data.csv' # Path to your CSV file
+DATA_PATH = 'Dataset/processed_data.csv' 
 MAX_LEN = 200
 
 # --- Helper Functions ---
@@ -56,7 +56,6 @@ def load_dataset():
     try:
         if os.path.exists(DATA_PATH):
             df = pd.read_csv(DATA_PATH)
-            # Ensure label matches your logic (0=Legit, 1=Phishing based on preprocessing)
             return df
         return None
     except Exception as e:
@@ -95,14 +94,12 @@ def save_log(url, status, confidence, source, reviewed=False):
 st.set_page_config(page_title="Phishing Website Detector", page_icon="🛡️", layout="wide")
 
 st.sidebar.title("Navigation")
-# CHANGED: Renamed sidebar options
 page = st.sidebar.radio("Go to", ["Homepage", "Admin Login"])
 
 model, tokenizer = load_resources()
 
 # --- PAGE 1: Homepage ---
 if page == "Homepage":
-    # CHANGED: Title
     st.title("🛡️ Phishing Website Detector")
     st.markdown("Enter a website URL below to check if it's safe using our **Deep Learning (CNN-BiLSTM)** model.")
 
@@ -151,7 +148,7 @@ if page == "Homepage":
                 else:
                     st.error("Model failed to load.")
     
-    # CHANGED: Added Data Display Section
+    # Data Display Section
     st.divider()
     st.subheader("Known Sites Database")
     st.markdown("A list of known legitimate and phishing websites from our training dataset.")
@@ -160,23 +157,28 @@ if page == "Homepage":
     if df is not None:
         col1, col2 = st.columns(2)
         
-        # Filter Data (Assuming Label 0 = Legit, 1 = Phishing based on preprocessing)
-        legit_sites = df[df['label'] == 0][['url']]
-        phishing_sites = df[df['label'] == 1][['url']]
+        # Filter and Fix Index
+        # Reset index to default (0,1,2...), then add 1 to make it start at 1
+        legit_sites = df[df['label'] == 0][['url']].reset_index(drop=True)
+        legit_sites.index += 1
+        
+        phishing_sites = df[df['label'] == 1][['url']].reset_index(drop=True)
+        phishing_sites.index += 1
         
         with col1:
-            st.success(f"**Legitimate Sites ({len(legit_sites)})**")
+            # Removed the (count) from header
+            st.success("**Legitimate Sites**")
             st.dataframe(legit_sites, use_container_width=True, height=400)
             
         with col2:
-            st.error(f"**Phishing Sites ({len(phishing_sites)})**")
+            # Removed the (count) from header
+            st.error("**Phishing Sites**")
             st.dataframe(phishing_sites, use_container_width=True, height=400)
     else:
         st.warning("Dataset not found. Please ensure 'processed_data.csv' is in the Dataset folder.")
 
 # --- PAGE 2: Admin Login ---
 elif page == "Admin Login":
-    # CHANGED: Heading and Subtext
     st.title("Admin Sign In")
     st.write("Enter your credentials to access your account")
     

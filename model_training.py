@@ -1,112 +1,194 @@
-import os
 import numpy as np
+import os
 import pandas as pd
 import tensorflow as tf
-from tensorflow.keras.models import Sequential, Model
-from tensorflow.keras.layers import (Input, Dense, LSTM, GRU, Conv1D, MaxPooling1D, 
-                                     Flatten, Dropout, Bidirectional)
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, Conv1D, GlobalMaxPooling1D, MaxPooling1D, Dense, Dropout, LSTM, GRU, Bidirectional
 from sklearn.model_selection import StratifiedKFold
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from tqdm.keras import TqdmCallback
 
-# Suppress TensorFlow info/warning logs
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# --- Configuration ---
+MAX_LEN = 200
+EMBEDDING_DIM = 32
+EPOCHS = 10
+BATCH_SIZE = 32
+K_FOLDS = 5
+MODELS_DIR = 'Models'
+RESULTS_FILE = 'model_performance.csv'
 
-# --- 1. DATA PREPARATION ---
-def load_and_preprocess():
-    # Load structured datasets
-    legit_df = pd.read_csv("Dataset/structured_legitimate_list.csv")
-    phish_df = pd.read_csv("Dataset/structured_phishing_list.csv")
-    df = pd.concat([legit_df, phish_df], ignore_index=True)
-    
-    # --- REMOVE BIASED FEATURES ---
-    # We drop non-features and the features causing 99% accuracy
-    features_to_drop = ['URL', 'label', 'dir_count', 'url_len']
-    X = df.drop(features_to_drop, axis=1).values
-    y = df['label'].values
-    
-    # Scale features
-    scaler = MinMaxScaler()
-    X = scaler.fit_transform(X)
-    
-    # Reshape for sequential models: (samples, features, 1)
-    X = X.reshape(X.shape[0], X.shape[1], 1)
-    
-    return X, y, X.shape[1]
+def load_data(base_dir='Dataset'):
+    print("Loading data...")
+    try:
+        X = np.load(os.path.join(base_dir, 'X_seq.npy'), allow_pickle=True)
+        y = np.load(os.path.join(base_dir, 'y.npy'), allow_pickle=True)
+        return X, y
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        return None, None
 
-# --- 2. MODEL FACTORIES ---
+def get_vocab_size(X):
+    return np.max(X) + 1
 
-def get_cnn(dim):
-    return Sequential([
-        Input(shape=(dim, 1)),
-        Conv1D(64, 3, activation='relu'),
-        MaxPooling1D(2),
-        Flatten(),
+# --- Model Builders ---
+
+def build_cnn(vocab_size, max_len):
+    model = Sequential([
+        Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=max_len),
+        Conv1D(filters=128, kernel_size=5, activation='relu'),
+        GlobalMaxPooling1D(),
         Dense(64, activation='relu'),
-        Dropout(0.3),
+        Dropout(0.5),
         Dense(1, activation='sigmoid')
-    ])
+    ], name="CNN")
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return model
 
-def get_lstm(dim):
-    return Sequential([
-        Input(shape=(dim, 1)),
+def build_lstm(vocab_size, max_len):
+    model = Sequential([
+        Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=max_len),
         LSTM(64),
-        Dense(32, activation='relu'),
+        Dense(64, activation='relu'),
+        Dropout(0.5),
         Dense(1, activation='sigmoid')
-    ])
+    ], name="LSTM")
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return model
 
-def get_gru(dim):
-    return Sequential([
-        Input(shape=(dim, 1)),
+def build_gru(vocab_size, max_len):
+    model = Sequential([
+        Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=max_len),
         GRU(64),
-        Dense(32, activation='relu'),
+        Dense(64, activation='relu'),
+        Dropout(0.5),
         Dense(1, activation='sigmoid')
-    ])
+    ], name="GRU")
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return model
 
-
-def get_cnn_bilstm(dim):
-    return Sequential([
-        Input(shape=(dim, 1)),
-        Conv1D(64, 3, activation='relu'),
-        MaxPooling1D(2),
+def build_cnn_bilstm(vocab_size, max_len):
+    model = Sequential([
+        Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=max_len),
+        Conv1D(filters=64, kernel_size=5, activation='relu', padding='same'),
+        MaxPooling1D(pool_size=4),
         Bidirectional(LSTM(64)),
+        Dense(64, activation='relu'),
+        Dropout(0.5),
         Dense(1, activation='sigmoid')
-    ])
+    ], name="CNN-BiLSTM")
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return model
 
-# --- 3. CROSS-VALIDATION LOOP ---
-X, y, input_dim = load_and_preprocess()
-print(f"Training on {input_dim} features (excluding biased URL metrics).")
-
-model_factories = {
-    "cnn": get_cnn, "lstm": get_lstm, "gru": get_gru, "cnn_bilstm": get_cnn_bilstm
-}
-
-os.makedirs("Models", exist_ok=True)
-final_results = {}
-
-for name, factory in model_factories.items():
-    print(f"\n--- 10-Fold CV: {name.upper()} ---")
-    skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
-    fold_accs = []
+def train_and_evaluate(builder, model_name, X, y, vocab_size):
+    skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=42)
     
-    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
+    fold_metrics = {'accuracy': [], 'precision': [], 'recall': [], 'f1': []}
+    
+    print(f"\n--- Evaluating {model_name} ({K_FOLDS}-Fold CV) ---")
+    
+    best_fold_acc = -1
+    
+    fold_no = 1
+    for train_idx, val_idx in skf.split(X, y):
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
         
-        model = factory(input_dim)
-        model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-        model.fit(X_train, y_train, epochs=10, batch_size=32, verbose=0)
+        # Fresh model for each fold
+        model = builder(vocab_size, MAX_LEN)
         
-        _, acc = model.evaluate(X_val, y_val, verbose=0)
-        fold_accs.append(acc)
-        print(f"Fold {fold} Accuracy: {acc:.4f}")
-    
-    avg_acc = np.mean(fold_accs)
-    final_results[name] = avg_acc
-    print(f"Average Accuracy for {name}: {avg_acc:.4f}")
-    
-    # Save the model
-    model.save(f"Models/{name}_model.keras")
+        print(f"Fold {fold_no}/{K_FOLDS}:")
+        
+        # Train with Progress Bar
+        # verbose=0 suppresses the default Keras log
+        # TqdmCallback(verbose=1) shows the progress bar
+        model.fit(
+            X_train, y_train, 
+            epochs=EPOCHS, 
+            batch_size=BATCH_SIZE, 
+            verbose=0, 
+            callbacks=[TqdmCallback(verbose=1)]
+        )
+        
+        # Predict
+        y_pred_prob = model.predict(X_val, verbose=0)
+        y_pred = (y_pred_prob > 0.5).astype(int).flatten()
+        
+        # Metrics
+        acc = accuracy_score(y_val, y_pred)
+        prec = precision_score(y_val, y_pred, zero_division=0)
+        rec = recall_score(y_val, y_pred, zero_division=0)
+        f1 = f1_score(y_val, y_pred, zero_division=0)
+        
+        fold_metrics['accuracy'].append(acc)
+        fold_metrics['precision'].append(prec)
+        fold_metrics['recall'].append(rec)
+        fold_metrics['f1'].append(f1)
+        
+        print(f"Fold {fold_no} Result: Accuracy={acc:.4f}")
+        
+        # Save the BEST version of THIS model type
+        if acc > best_fold_acc:
+            best_fold_acc = acc
+            save_path = os.path.join(MODELS_DIR, f"{model_name}.h5")
+            model.save(save_path)
+            
+        fold_no += 1
+        
+    # Aggregate Results
+    return {
+        'Model': model_name,
+        'Accuracy': np.mean(fold_metrics['accuracy']),
+        'Accuracy_Std': np.std(fold_metrics['accuracy']),
+        'Precision': np.mean(fold_metrics['precision']),
+        'Precision_Std': np.std(fold_metrics['precision']),
+        'Recall': np.mean(fold_metrics['recall']),
+        'Recall_Std': np.std(fold_metrics['recall']),
+        'F1_Score': np.mean(fold_metrics['f1']),
+        'F1_Std': np.std(fold_metrics['f1'])
+    }
 
-print("\n--- Final Results ---")
-for m_name, accuracy in final_results.items():
-    print(f"{m_name}: {accuracy:.4f}")
+def main():
+    if not os.path.exists(MODELS_DIR):
+        os.makedirs(MODELS_DIR)
+        
+    X, y = load_data()
+    if X is None: return
+    
+    vocab_size = get_vocab_size(X)
+    print(f"Vocabulary Size: {vocab_size}")
+    
+    models = [
+        (build_cnn, "CNN"),
+        (build_lstm, "LSTM"),
+        (build_gru, "GRU"),
+        (build_cnn_bilstm, "CNN-BiLSTM")
+    ]
+    
+    results = []
+    
+    for builder, name in models:
+        try:
+            res = train_and_evaluate(builder, name, X, y, vocab_size)
+            results.append(res)
+        except Exception as e:
+            print(f"Error training {name}: {e}")
+            import traceback
+            traceback.print_exc()
+            
+    # Save Results
+    if results:
+        df = pd.DataFrame(results)
+        # Reorder for nice output
+        cols = ['Model', 'Accuracy', 'Accuracy_Std', 'F1_Score', 'F1_Std', 
+                'Precision', 'Precision_Std', 'Recall', 'Recall_Std']
+        df = df[cols]
+        
+        csv_path = os.path.join(MODELS_DIR, RESULTS_FILE)
+        df.to_csv(csv_path, index=False)
+        
+        print(f"\nAll models trained and saved to {MODELS_DIR}/")
+        print(f"Detailed statistics saved to {csv_path}")
+        print(df)
+
+if __name__ == "__main__":
+    main()

@@ -1,197 +1,222 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
 import tensorflow as tf
-import plotly.express as px
-import plotly.graph_objects as go
-from bs4 import BeautifulSoup
-import requests
-import feature_extraction as fe
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.preprocessing import MinMaxScaler
+import pickle
 import os
+import re
+from datetime import datetime
+from pymongo import MongoClient
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from dotenv import load_dotenv
 
-# --- 1. DYNAMIC DATA & PERFORMANCE EVALUATION ---
-@st.cache_data
-def get_dataset_stats():
-    """Reads actual row counts from the cleaned datasets."""
-    try:
-        legit_df = pd.read_csv("Dataset/structured_legitimate_list.csv")
-        phish_df = pd.read_csv("Dataset/structured_phishing_list.csv")
-        return len(legit_df), len(phish_df), legit_df, phish_df
-    except Exception:
-        return 0, 0, None, None
+# --- Configuration ---
+load_dotenv()
 
-legit_n, phish_n, legit_df, phish_df = get_dataset_stats()
-total_n = legit_n + phish_n
+# MongoDB Connection
+# Checks for 'MONGO_URI' in .env or Streamlit Secrets
+MONGO_URI = os.getenv("MONGO_URI") 
+if not MONGO_URI and "MONGO_URI" in st.secrets:
+    MONGO_URI = st.secrets["MONGO_URI"]
+
+# Default fallback (local) if nothing is found
+if not MONGO_URI:
+    MONGO_URI = "mongodb://localhost:27017/"
+
+try:
+    client = MongoClient(MONGO_URI)
+    db = client['phishing_detector_db']
+    url_collection = db['url_logs']
+    list_collection = db['whitelists_blacklists']
+    # Test connection
+    client.server_info()
+except Exception as e:
+    st.error(f"❌ Database Connection Failed: {e}")
+    st.stop()
+
+# Model Paths
+MODEL_PATH = 'models/CNN-BiLSTM.h5'
+TOKENIZER_PATH = 'dataset/tokenizer.pkl'
+MAX_LEN = 200
+
+# --- Helper Functions ---
 
 @st.cache_resource
-def load_models():
-    names = ["cnn", "lstm", "gru", "cnn_lstm", "cnn_bilstm"]
-    loaded = {}
-    for n in names:
-        path = f"Models/{n}_model.keras"
-        if os.path.exists(path):
-            loaded[n] = tf.keras.models.load_model(path)
-    return loaded
+def load_resources():
+    """Loads the model and tokenizer only once to speed up the app."""
+    try:
+        model = tf.keras.models.load_model(MODEL_PATH)
+        with open(TOKENIZER_PATH, 'rb') as f:
+            tokenizer = pickle.load(f)
+        return model, tokenizer
+    except Exception as e:
+        st.error(f"Error loading resources: {e}")
+        return None, None
 
-models = load_models()
+def normalize_url(url):
+    if not url: return ""
+    url = url.lower().strip()
+    url = re.sub(r'^https?://', '', url)
+    url = re.sub(r'^www\.', '', url)
+    if url.endswith('/'):
+        url = url[:-1]
+    return url
 
-@st.cache_data
-def evaluate_models(_models, _legit_df, _phish_df):
-    """Evaluates the saved models against a test sample to get real metrics."""
-    if not _models or _legit_df is None:
-        return pd.DataFrame()
+def predict_url(model, tokenizer, url):
+    # 1. Normalize
+    norm_url = normalize_url(url)
     
-    df = pd.concat([_legit_df, _phish_df], ignore_index=True).sample(frac=0.2, random_state=42)
-    X = df.drop(['URL', 'label', 'dir_count', 'url_len'], axis=1).values
-    y_true = df['label'].values
+    # 2. Tokenize (Character Level)
+    # Convert chars to integers using the dictionary
+    seq = [tokenizer.get(c, 0) for c in norm_url]
     
-    scaler = MinMaxScaler()
-    X = scaler.fit_transform(X)
-    X = X.reshape(X.shape[0], X.shape[1], 1)
+    # 3. Pad Sequence (The Correct Way)
+    # We pass [seq] because pad_sequences expects a list of sequences
+    padded_seq = pad_sequences([seq], maxlen=MAX_LEN, padding='post', truncating='post')
     
-    results = []
-    for name, model in _models.items():
-        y_prob = model.predict(X, verbose=0)
-        y_pred = (y_prob > 0.5).astype(int)
-        
-        results.append({
-            "Model": name.upper(),
-            "Accuracy": accuracy_score(y_true, y_pred),
-            "Precision": precision_score(y_true, y_pred),
-            "Recall": recall_score(y_true, y_pred),
-            "F1-Score": f1_score(y_true, y_pred)
-        })
-    return pd.DataFrame(results)
+    # 4. Predict
+    # Returns probability between 0 and 1
+    return model.predict(padded_seq)[0][0]
 
-# --- 2. HEADER & OBJECTIVE ---
-st.title("🛡️ Detecting Phishing Websites Using Hybrid Deep Learning")
-
-st.write(f"""
-This DL-based app is developed for research purposes. Objective of the app is detecting phishing websites only using **URL Lexical and HTML Content** data. You can see the details of approach, data set, and feature set if you click on **"PROJECT DETAILS"**.
-""")
-
-# --- 3. PROJECT DETAILS (EXPANDER) ---
-with st.expander("📂 PROJECT DETAILS", expanded=False):
-    st.write("### Dataset Overview")
-    
-    if total_n > 0:
-        fig_pie = px.pie(
-            values=[legit_n, phish_n], 
-            names=[f'Legitimate ({legit_n})', f'Phishing ({phish_n})'], 
-            color_discrete_sequence=['#2ecc71', '#e74c3c'], 
-            hole=0.4
-        )
-        st.plotly_chart(fig_pie)
-
-        st.write("**Dataset Details (Post-Cleaning):**")
-        st.write(f"- **Total Samples:** {total_n:,}")
-        st.write(f"- **Legitimate Data:** {legit_n:,} URLs sourced from the Tranco Top 1M list.")
-        st.write(f"- **Phishing Data:** {phish_n:,} URLs sourced from PhishTank verified archives.")
-        st.write("- **Data Cleaning:** Removed duplicates, normalized URLs, and discarded non-responsive links.")
-
-        st.divider()
-
-        # --- FEATURE EXTRACTION SECTION ---
-        st.write("### Feature Extraction")
-        st.write("""
-        A hybrid feature extraction approach was utilized to capture both the identity and the behavioral structure of the websites. 
-        After initial extraction of 61 features, 2 biased features (`dir_count` and `url_len`) were removed to prevent data leakage, resulting in a **59-feature vector** categorized as follows:
-        """)
-
-        f_col1, f_col2, f_col3 = st.columns(3)
-        with f_col1:
-            st.write("**1. HTML Content Features**")
-            st.write("- Tag counts (Inputs, Images, Buttons)")
-            st.write("- Structural flags (Has Password, Has Form)")
-        with f_col2:
-            st.write("**2. URL Lexical Features**")
-            st.write("- Domain stats (Host Length, Dot Count)")
-            st.write("- Security flags (Is IP, Is Shortened)")
-        with f_col3:
-            st.write("**3. Behavioral Ratios**")
-            st.write("- External Resource Ratios (JS, CSS, Img)")
-            st.write("- Suspicious Form Action checks")
-
-        st.divider()
-
-        st.write("### Model Performance Comparison")
-        df_results = evaluate_models(models, legit_df, phish_df)
-        
-        if not df_results.empty:
-            st.table(df_results.set_index("Model"))
-            
-            fig_metrics = go.Figure()
-            for metric in ["Accuracy", "Precision", "Recall", "F1-Score"]:
-                fig_metrics.add_trace(go.Bar(x=df_results["Model"], y=df_results[metric], name=metric))
-            
-            fig_metrics.update_layout(barmode='group', height=500, yaxis_title="Score (0.0 - 1.0)")
-            st.plotly_chart(fig_metrics, use_container_width=True)
-
-# --- 4. LIVE DETECTION LAB ---
-st.divider()
-st.header("🔍 Live Detection Lab")
-st.write("Submit a URL below to run real-time inference across all trained research models.")
-
-# --- EXAMPLE URLS TABLE ---
-with st.expander("💡 View Example URLs for Testing"):
-    st.write("Copy and paste these URLs to see how the models respond:")
-    example_data = {
-        "Type": ["Legitimate", "Legitimate", "Phishing", "Phishing"],
-        "URL": [
-            "https://www.google.com", 
-            "https://www.wikipedia.org", 
-            "http://4569-5690.free.nf/verif.html", 
-            "https://fr-mercdeu.firebaseapp.com/"
-        ]
+def save_log(url, status, confidence, source, reviewed=False):
+    """Saves the scan result to MongoDB"""
+    log_entry = {
+        "url": url,
+        "normalized_url": normalize_url(url),
+        "status": status,
+        "confidence": float(confidence),
+        "source": source,
+        "timestamp": datetime.utcnow(),
+        "reviewed": reviewed
     }
-    st.table(pd.DataFrame(example_data))
+    url_collection.insert_one(log_entry)
 
-url_input = st.text_input("Enter URL to analyze:", placeholder="https://example.com")
+# --- UI Layout ---
 
-# Define column names for feature alignment
-COLUMN_NAMES = [
-    'has_title', 'has_input', 'has_button', 'has_image', 'has_submit', 'has_link',
-    'has_password', 'has_email_input', 'has_hidden_element', 'has_audio', 'has_video',
-    'number_of_inputs', 'number_of_buttons', 'number_of_images', 'number_of_option',
-    'number_of_list', 'number_of_th', 'number_of_tr', 'number_of_href', 'number_of_paragraph',
-    'number_of_script', 'length_of_title', 'has_h1', 'has_h2', 'has_h3', 'length_of_text',
-    'number_of_clickable_button', 'number_of_a', 'number_of_img', 'number_of_div',
-    'number_of_figure', 'has_footer', 'has_form', 'has_text_area', 'has_iframe',
-    'has_text_input', 'number_of_meta', 'has_nav', 'has_object', 'has_picture',
-    'number_of_sources', 'number_of_span', 'number_of_table',
-    'form_action_suspicious', 'null_hyperlinks_ratio', 'external_img_ratio', 
-    'external_css_ratio', 'external_js_ratio', 'url_len', 'host_len', 'dot_count', 
-    'hyphen_count', 'is_ip', 'has_at', 'double_slash', 'dir_count', 'http_in_host', 
-    'has_keyword', 'digit_count', 'is_shortened', 'risky_tld'
-]
+st.set_page_config(page_title="Phishing Detector AI", page_icon="🛡️", layout="wide")
 
-if st.button("Analyze URL"):
-    if url_input and models:
-        try:
-            with st.spinner("Analyzing site structure..."):
-                headers = {'User-Agent': 'Mozilla/5.0'}
-                res = requests.get(url_input, timeout=5, verify=False, headers=headers)
-                soup = BeautifulSoup(res.content, "html.parser")
-                full_vector = fe.create_vector(soup, url_input)
-                
-                temp_df = pd.DataFrame([full_vector], columns=COLUMN_NAMES)
-                final_df = temp_df.drop(['dir_count', 'url_len'], axis=1)
-                input_data = final_df.values.reshape(1, 59, 1)
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to", ["Scanner", "Admin Dashboard"])
 
-                st.write("### Model Consensus Results")
-                cols = st.columns(3)
-                
-                for idx, (m_name, model) in enumerate(models.items()):
-                    prob = model.predict(input_data, verbose=0)[0][0]
-                    with cols[idx % 3]:
-                        st.write(f"**{m_name.upper()}**")
-                        if prob > 0.8:
-                            st.error(f"🚨 Phishing ({prob*100:.1f}%)")
-                        elif prob > 0.1:
-                            st.warning(f"⚠️ Cautious ({prob*100:.1f}%)")
-                        else:
-                            st.success(f"✅ Safe ({(1-prob)*100:.1f}%)")
-        except Exception as e:
-            st.error(f"Analysis Failed: Ensure the URL is active and reachable. Error: {e}")
+model, tokenizer = load_resources()
+
+# --- PAGE 1: URL Scanner ---
+if page == "Scanner":
+    st.title("🛡️ AI Phishing URL Scanner")
+    st.markdown("Enter a website URL below to check if it's safe using our **Deep Learning (CNN-BiLSTM)** model.")
+
+    url_input = st.text_input("Website URL", placeholder="http://example.com")
+
+    if st.button("Scan Now"):
+        if not url_input:
+            st.warning("Please enter a URL.")
+        else:
+            norm_url = normalize_url(url_input)
+            
+            # 1. Check Whitelist/Blacklist
+            list_entry = list_collection.find_one({"url": norm_url})
+            
+            if list_entry:
+                if list_entry['type'] == 'whitelist':
+                    st.success(f"✅ **Legitimate** (Verified Whitelist)")
+                    save_log(url_input, "Legitimate", 1.0, "Whitelist", True)
+                else:
+                    st.error(f"🚨 **Phishing** (Verified Blacklist)")
+                    save_log(url_input, "Phishing", 1.0, "Blacklist", True)
+            
+            else:
+                # 2. Use AI Model
+                if model and tokenizer:
+                    with st.spinner("Analyzing patterns..."):
+                        prob = predict_url(model, tokenizer, url_input)
+                    
+                    if prob >= 0.90:
+                        st.error(f"🚨 **Phishing Detected**")
+                        st.metric("Confidence Score", f"{prob*100:.2f}%")
+                        st.info("This site exhibits patterns commonly found in phishing attacks.")
+                        save_log(url_input, "Phishing", prob, "Model", True)
+                        
+                    elif prob <= 0.10:
+                        st.success(f"✅ **Legitimate Site**")
+                        st.metric("Confidence Score", f"{(1-prob)*100:.2f}%")
+                        st.info("This site looks safe based on our analysis.")
+                        save_log(url_input, "Legitimate", prob, "Model", True)
+                        
+                    else:
+                        st.warning(f"⚠️ **Uncertain / Suspicious**")
+                        st.metric("Phishing Probability", f"{prob*100:.2f}%")
+                        st.write("Our model is not 100% sure. This URL has been flagged for manual review.")
+                        save_log(url_input, "Pending Review", prob, "Model", False)
+                else:
+                    st.error("Model failed to load.")
+
+# --- PAGE 2: Admin Dashboard ---
+elif page == "Admin Dashboard":
+    st.title("Admin Dashboard")
+    
+    if 'admin_logged_in' not in st.session_state:
+        st.session_state.admin_logged_in = False
+
+    if not st.session_state.admin_logged_in:
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            # Check secrets first, then env, then fallback
+            admin_user = os.getenv("ADMIN_USER") or (st.secrets["ADMIN_USER"] if "ADMIN_USER" in st.secrets else "admin")
+            admin_pass = os.getenv("ADMIN_PASS") or (st.secrets["ADMIN_PASS"] if "ADMIN_PASS" in st.secrets else "admin123")
+            
+            if username == admin_user and password == admin_pass:
+                st.session_state.admin_logged_in = True
+                st.rerun()
+            else:
+                st.error("Invalid credentials")
+    else:
+        st.success("Logged in as Admin")
+        if st.button("Logout"):
+            st.session_state.admin_logged_in = False
+            st.rerun()
+            
+        st.divider()
+        
+        # --- Pending Reviews ---
+        st.subheader("⚠️ Pending Reviews")
+        pending_items = list(url_collection.find({"reviewed": False}).sort("timestamp", -1))
+        
+        if not pending_items:
+            st.info("No URLs pending review.")
+        
+        for item in pending_items:
+            with st.expander(f"{item['url']} (Score: {item['confidence']:.2f})"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Mark Legitimate", key=f"legit_{item['_id']}"):
+                        url_collection.update_one({"_id": item['_id']}, {"$set": {"status": "Legitimate", "reviewed": True}})
+                        list_collection.update_one(
+                            {"url": item['normalized_url']}, 
+                            {"$set": {"url": item['normalized_url'], "type": "whitelist"}}, 
+                            upsert=True
+                        )
+                        st.success("Whitelisted!")
+                        st.rerun()
+                        
+                with col2:
+                    if st.button("Mark Phishing", key=f"phish_{item['_id']}"):
+                        url_collection.update_one({"_id": item['_id']}, {"$set": {"status": "Phishing", "reviewed": True}})
+                        list_collection.update_one(
+                            {"url": item['normalized_url']}, 
+                            {"$set": {"url": item['normalized_url'], "type": "blacklist"}}, 
+                            upsert=True
+                        )
+                        st.error("Blacklisted!")
+                        st.rerun()
+
+        st.divider()
+        
+        # --- History ---
+        st.subheader("📋 Recent Scan History")
+        recent_logs = list(url_collection.find().sort("timestamp", -1).limit(20))
+        
+        if recent_logs:
+            import pandas as pd
+            df = pd.DataFrame(recent_logs)
+            st.dataframe(df[['timestamp', 'url', 'status', 'confidence', 'source']], use_container_width=True)
+        else:
+            st.write("No history found.")

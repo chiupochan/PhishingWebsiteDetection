@@ -27,7 +27,7 @@ total_n = legit_n + phish_n
 
 @st.cache_resource
 def load_models():
-    names = ["cnn", "lstm", "gru", "cnn_lstm", "cnn_bilstm", "cnn_bilstm_attention"]
+    names = ["cnn", "lstm", "gru", "cnn_lstm", "cnn_bilstm"]
     loaded = {}
     for n in names:
         path = f"Models/{n}_model.keras"

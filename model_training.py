@@ -4,8 +4,7 @@ import pandas as pd
 import tensorflow as tf
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import (Input, Dense, LSTM, GRU, Conv1D, MaxPooling1D, 
-                                     Flatten, Dropout, Bidirectional, RepeatVector,
-                                     Multiply, Permute, GlobalAveragePooling1D)
+                                     Flatten, Dropout, Bidirectional)
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler
 
@@ -63,14 +62,6 @@ def get_gru(dim):
         Dense(1, activation='sigmoid')
     ])
 
-def get_cnn_lstm(dim):
-    return Sequential([
-        Input(shape=(dim, 1)),
-        Conv1D(64, 3, activation='relu'),
-        MaxPooling1D(2),
-        LSTM(64),
-        Dense(1, activation='sigmoid')
-    ])
 
 def get_cnn_bilstm(dim):
     return Sequential([
@@ -81,34 +72,12 @@ def get_cnn_bilstm(dim):
         Dense(1, activation='sigmoid')
     ])
 
-def get_cnn_bilstm_attention(dim):
-    inputs = Input(shape=(dim, 1))
-    x = Conv1D(64, 3, activation='relu')(inputs)
-    x = MaxPooling1D(2)(x)
-    
-    lstm_out = Bidirectional(LSTM(64, return_sequences=True))(x)
-    
-    # Attention Layer
-    seq_len = lstm_out.shape[1]
-    attention = Dense(1, activation='tanh')(lstm_out)
-    attention = Flatten()(attention)
-    attention = Dense(seq_len, activation='softmax')(attention)
-    attention = RepeatVector(128)(attention) # 128 = BiLSTM units
-    attention = Permute([2, 1])(attention)
-    
-    representation = Multiply()([lstm_out, attention])
-    representation = GlobalAveragePooling1D()(representation)
-    
-    return Model(inputs, Dense(1, activation='sigmoid')(representation))
-
 # --- 3. CROSS-VALIDATION LOOP ---
 X, y, input_dim = load_and_preprocess()
 print(f"Training on {input_dim} features (excluding biased URL metrics).")
 
 model_factories = {
-    "cnn": get_cnn, "lstm": get_lstm, "gru": get_gru,
-    "cnn_lstm": get_cnn_lstm, "cnn_bilstm": get_cnn_bilstm,
-    "cnn_bilstm_attention": get_cnn_bilstm_attention
+    "cnn": get_cnn, "lstm": get_lstm, "gru": get_gru, "cnn_bilstm": get_cnn_bilstm
 }
 
 os.makedirs("Models", exist_ok=True)

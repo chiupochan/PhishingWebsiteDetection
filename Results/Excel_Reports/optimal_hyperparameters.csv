@@ -1,0 +1,9 @@
+Model,Hyperparameter,Range,Optimal Value
+CNN,filters,"[32, 64]",64
+CNN,dropout,"[0.3, 0.5]",0.5
+LSTM,lstm_units,"[32, 64]",64
+LSTM,dropout,"[0.3, 0.5]",0.3
+GRU,gru_units,"[32, 64]",64
+GRU,dropout,"[0.3, 0.5]",0.3
+CNN-BiLSTM,lstm_units,"[32, 64]",32
+CNN-BiLSTM,dropout,"[0.3, 0.5]",0.3

@@ -31,7 +31,7 @@ except Exception as e:
     st.stop()
 
 # File Paths
-MODEL_PATH = 'Models/CNN-BiLSTM.h5'
+MODEL_PATH = 'Models/CNN-BiLSTM_best.h5'
 TOKENIZER_PATH = 'Dataset/tokenizer.pkl'
 DATA_PATH = 'Dataset/processed_data.csv' 
 MAX_LEN = 200

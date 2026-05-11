@@ -135,16 +135,16 @@ if page == "Homepage":
                         save_log(url_input, "Phishing", prob, "Model", True)
                         
                     elif prob <= 0.50:
-                        st.success(f"✅ **Legitimate Site**")
-                        st.metric("Confidence Score", f"{(1-prob)*100:.2f}%")
-                        st.info("This site looks safe based on our analysis.")
-                        save_log(url_input, "Legitimate", prob, "Model", True)
-                        
-                    else:
                         st.warning(f"⚠️ **Uncertain / Suspicious**")
                         st.metric("Phishing Probability", f"{prob*100:.2f}%")
                         st.write("Our model is not 100% sure. This URL has been flagged for manual review.")
                         save_log(url_input, "Pending Review", prob, "Model", False)
+                        
+                    else:
+                        st.success(f"✅ **Legitimate Site**")
+                        st.metric("Confidence Score", f"{(1-prob)*100:.2f}%")
+                        st.info("This site looks safe based on our analysis.")
+                        save_log(url_input, "Legitimate", prob, "Model", True)
                 else:
                     st.error("Model failed to load.")
     

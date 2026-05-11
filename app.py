@@ -31,7 +31,7 @@ except Exception as e:
     st.stop()
 
 # File Paths
-MODEL_PATH = 'Models/CNN-BiLSTM.h5'
+MODEL_PATH = 'Models/CNN-BiLSTM_best.h5'
 TOKENIZER_PATH = 'Dataset/tokenizer.pkl'
 DATA_PATH = 'Dataset/processed_data.csv' 
 MAX_LEN = 200
@@ -128,23 +128,21 @@ if page == "Homepage":
                     with st.spinner("Analyzing patterns..."):
                         prob = predict_url(model, tokenizer, url_input)
                     
-                    if prob >= 0.9999:
-                        st.error(f"🚨 **Phishing Detected**")
-                        st.metric("Confidence Score", f"{prob*100:.2f}%")
-                        st.info("This site exhibits patterns commonly found in phishing attacks.")
-                        save_log(url_input, "Phishing", prob, "Model", True)
-                        
-                    elif prob <= 0.50:
-                        st.warning(f"⚠️ **Uncertain / Suspicious**")
-                        st.metric("Phishing Probability", f"{prob*100:.2f}%")
-                        st.write("Our model is not 100% sure. This URL has been flagged for manual review.")
-                        save_log(url_input, "Pending Review", prob, "Model", False)
-                        
-                    else:
+                    if prob >= 0.50:
                         st.success(f"✅ **Legitimate Site**")
                         st.metric("Confidence Score", f"{(prob)*100:.2f}%")
                         st.info("This site looks safe based on our analysis.")
                         save_log(url_input, "Legitimate", prob, "Model", True)
+                    elif prob <= 0.10:
+                        st.warning(f"⚠️ **Uncertain / Suspicious**")
+                        st.metric("Phishing Probability", f"{prob*100:.2f}%")
+                        st.write("Our model is not 100% sure. This URL has been flagged for manual review.")
+                        save_log(url_input, "Pending Review", prob, "Model", False)
+                    else:
+                        st.error(f"🚨 **Phishing Detected**")
+                        st.metric("Confidence Score", f"{prob*100:.2f}%")
+                        st.info("This site exhibits patterns commonly found in phishing attacks.")
+                        save_log(url_input, "Phishing", prob, "Model", True)
                 else:
                     st.error("Model failed to load.")
     

@@ -190,7 +190,7 @@ elif page == "Admin Login":
         password = st.text_input("Password", type="password")
         if st.button("Login"):
             admin_user = os.getenv("ADMIN_USER") or (st.secrets["ADMIN_USER"] if "ADMIN_USER" in st.secrets else "admin")
-            admin_pass = os.getenv("ADMIN_PASS") or (st.secrets["ADMIN_PASS"] if "ADMIN_PASS" in st.secrets else "admin123")
+            admin_pass = os.getenv("ADMIN_PASS") or (st.secrets["ADMIN_PASS"] if "ADMIN_PASS" in st.secrets else "123")
             
             if username == admin_user and password == admin_pass:
                 st.session_state.admin_logged_in = True

@@ -128,13 +128,13 @@ if page == "Homepage":
                     with st.spinner("Analyzing patterns..."):
                         prob = predict_url(model, tokenizer, url_input)
                     
-                    if prob >= 0.9996:
+                    if prob >= 0.9999:
                         st.error(f"🚨 **Phishing Detected**")
                         st.metric("Confidence Score", f"{prob*100:.2f}%")
                         st.info("This site exhibits patterns commonly found in phishing attacks.")
                         save_log(url_input, "Phishing", prob, "Model", True)
                         
-                    elif prob <= 0.10:
+                    elif prob <= 0.50:
                         st.success(f"✅ **Legitimate Site**")
                         st.metric("Confidence Score", f"{(1-prob)*100:.2f}%")
                         st.info("This site looks safe based on our analysis.")

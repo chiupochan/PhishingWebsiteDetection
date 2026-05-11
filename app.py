@@ -65,8 +65,8 @@ def load_dataset():
 def normalize_url(url):
     if not url: return ""
     url = url.lower().strip()
-    # url = re.sub(r'^https?://', '', url)
-    # url = re.sub(r'^www\.', '', url)
+    url = re.sub(r'^https?://', '', url)
+    url = re.sub(r'^www\.', '', url)
     if url.endswith('/'):
         url = url[:-1]
     return url
@@ -279,7 +279,7 @@ elif page == "Admin Login":
                         {"$set": {"status": "Phishing", "reviewed": True}}
                     )
                     st.error(f"{override_url} is now Blacklisted!")
-
+                    
         # --- History ---
         st.write("#### 📋 Recent Scan History")
         recent_logs = list(url_collection.find().sort("timestamp", -1).limit(20))

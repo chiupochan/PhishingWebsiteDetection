@@ -142,7 +142,7 @@ if page == "Homepage":
                         
                     else:
                         st.success(f"✅ **Legitimate Site**")
-                        st.metric("Confidence Score", f"{(1-prob)*100:.2f}%")
+                        st.metric("Confidence Score", f"{(prob)*100:.2f}%")
                         st.info("This site looks safe based on our analysis.")
                         save_log(url_input, "Legitimate", prob, "Model", True)
                 else:

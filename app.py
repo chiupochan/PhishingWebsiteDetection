@@ -240,6 +240,46 @@ elif page == "Admin Login":
 
         st.divider()
         
+        # --- Manual Override (Correct False Predictions) ---
+        st.write("#### 🔍 Manual Override (Search & Correct)")
+        st.write("Use this if the model was highly confident but completely wrong.")
+        
+        override_url = st.text_input("Enter URL to correct:")
+        
+        if override_url:
+            norm_override = normalize_url(override_url)
+            col_ov1, col_ov2 = st.columns(2)
+            
+            with col_ov1:
+                if st.button("✅ Force Legitimate (Whitelist)", use_container_width=True):
+                    # Add to MongoDB Whitelist
+                    list_collection.update_one(
+                        {"url": norm_override}, 
+                        {"$set": {"url": norm_override, "type": "whitelist"}}, 
+                        upsert=True
+                    )
+                    # Correct past logs
+                    url_collection.update_many(
+                        {"normalized_url": norm_override}, 
+                        {"$set": {"status": "Legitimate", "reviewed": True}}
+                    )
+                    st.success(f"{override_url} is now Whitelisted!")
+                    
+            with col_ov2:
+                if st.button("🚨 Force Phishing (Blacklist)", use_container_width=True):
+                    # Add to MongoDB Blacklist
+                    list_collection.update_one(
+                        {"url": norm_override}, 
+                        {"$set": {"url": norm_override, "type": "blacklist"}}, 
+                        upsert=True
+                    )
+                    # Correct past logs
+                    url_collection.update_many(
+                        {"normalized_url": norm_override}, 
+                        {"$set": {"status": "Phishing", "reviewed": True}}
+                    )
+                    st.error(f"{override_url} is now Blacklisted!")
+                    
         # --- History ---
         st.write("#### 📋 Recent Scan History")
         recent_logs = list(url_collection.find().sort("timestamp", -1).limit(20))

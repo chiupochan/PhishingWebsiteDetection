@@ -4,6 +4,7 @@ import pickle
 import os
 import re
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from pymongo import MongoClient
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -126,23 +127,38 @@ if page == "Homepage":
                 # Use AI Model
                 if model and tokenizer:
                     with st.spinner("Analyzing patterns..."):
-                        prob = predict_url(model, tokenizer, url_input)
+                        # Get raw saturated probability from the model
+                        raw_prob = predict_url(model, tokenizer, url_input)
+                        
+                        # --- TEMPERATURE SCALING PATCH ---
+                        prob_clipped = np.clip(raw_prob, 1e-7, 1 - 1e-7)
+                        logit = np.log(prob_clipped / (1 - prob_clipped))
+                        TEMPERATURE = 2.5 # Adjust this higher if scores are still too close to 99%
+                        scaled_logit = logit / TEMPERATURE
+                        prob = 1 / (1 + np.exp(-scaled_logit))
+                        # ---------------------------------
                     
-                    if prob >= 0.50:
-                        st.success(f"✅ **Legitimate Site**")
-                        st.metric("Confidence Score", f"{(prob)*100:.2f}%")
-                        st.info("This site looks safe based on our analysis.")
-                        save_log(url_input, "Legitimate", prob, "Model", True)
-                    elif prob <= 0.10:
-                        st.warning(f"⚠️ **Uncertain / Suspicious**")
-                        st.metric("Phishing Probability", f"{prob*100:.2f}%")
-                        st.write("Our model is not 100% sure. This URL has been flagged for manual review.")
-                        save_log(url_input, "Pending Review", prob, "Model", False)
-                    else:
+                    # --- CORRECTED CLASSIFICATION LOGIC ---
+                    if prob >= 0.90:
                         st.error(f"🚨 **Phishing Detected**")
                         st.metric("Confidence Score", f"{prob*100:.2f}%")
                         st.info("This site exhibits patterns commonly found in phishing attacks.")
                         save_log(url_input, "Phishing", prob, "Model", True)
+                        
+                    elif prob <= 0.10:
+                        st.success(f"✅ **Legitimate Site**")
+                        # For legitimate sites, confidence is the inverse of the phishing probability
+                        st.metric("Confidence Score", f"{(1-prob)*100:.2f}%")
+                        st.info("This site looks safe based on our analysis.")
+                        save_log(url_input, "Legitimate", prob, "Model", True)
+                        
+                    else:
+                        st.warning(f"⚠️ **Uncertain / Suspicious**")
+                        # If it's uncertain, we show the raw probability of it being a threat
+                        st.metric("Phishing Probability", f"{prob*100:.2f}%")
+                        st.write("Our model is not 100% sure. This URL has been flagged for manual review.")
+                        save_log(url_input, "Pending Review", prob, "Model", False)
+                    # --------------------------------------
                 else:
                     st.error("Model failed to load.")
     
@@ -156,7 +172,6 @@ if page == "Homepage":
         col1, col2 = st.columns(2)
         
         # Filter and Fix Index
-        # Reset index to default (0,1,2...), then add 1 to make it start at 1
         legit_sites = df[df['label'] == 0][['url']].reset_index(drop=True)
         legit_sites.index += 1
         
@@ -164,12 +179,10 @@ if page == "Homepage":
         phishing_sites.index += 1
         
         with col1:
-            # Removed the (count) from header
             st.success("**Legitimate Sites**")
             st.dataframe(legit_sites, use_container_width=True, height=400)
             
         with col2:
-            # Removed the (count) from header
             st.error("**Phishing Sites**")
             st.dataframe(phishing_sites, use_container_width=True, height=400)
     else:

@@ -74,9 +74,14 @@ def normalize_url(url):
 
 def predict_url(model, tokenizer, url):
     norm_url = normalize_url(url)
-    seq = [tokenizer.word_index.get(c, tokenizer.word_index.get('<OOV>', 0)) for c in norm_url]
-    # FIX: Padding must be 'pre' to match your training script, otherwise inference breaks
-    padded_seq = pad_sequences([seq], maxlen=MAX_LEN, padding='pre', truncating='post')
+    
+    # SAFEST METHOD: Let Keras handle the tokenization and OOV characters natively
+    sequence = tokenizer.texts_to_sequences([norm_url])[0]
+    
+    # Pad the sequence (Make sure padding='pre' matches your updated training script)
+    padded_seq = pad_sequences([sequence], maxlen=MAX_LEN, padding='pre', truncating='post')
+    
+    # Return the prediction probability
     return model.predict(padded_seq, verbose=0)[0][0]
 
 def save_log(url, status, confidence, source, reviewed=False):

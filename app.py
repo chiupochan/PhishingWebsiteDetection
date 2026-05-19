@@ -161,7 +161,7 @@ if page == "Homepage":
                     
                     # --- FIX: CORRECTED CLASSIFICATION LOGIC ---
                     # 1 = Legitimate, 0 = Phishing
-                    if prob >= 0.85: # High probability means it's LEGITIMATE
+                    if prob >= 0.50: # High probability means it's LEGITIMATE
                         st.success(f"✅ **Legitimate Site**")
                         st.metric("Confidence Score", f"{prob*100:.2f}%")
                         st.info("This site looks safe based on our analysis.")

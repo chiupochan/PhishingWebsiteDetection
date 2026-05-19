@@ -5,7 +5,7 @@ import os
 import re
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
 from pymongo import MongoClient
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from dotenv import load_dotenv
@@ -35,7 +35,7 @@ except Exception as e:
 MODEL_PATH = 'Models/CNN-BiLSTM_best.keras'
 TOKENIZER_PATH = 'Dataset/tokenizer.pkl'
 DATA_PATH = 'Dataset/processed_data.csv' 
-MAX_LEN = 200
+MAX_LEN = 100 # Updated to 100 to match your final optimized training script
 
 # --- Helper Functions ---
 
@@ -74,9 +74,10 @@ def normalize_url(url):
 
 def predict_url(model, tokenizer, url):
     norm_url = normalize_url(url)
-    seq = [tokenizer.get(c, 0) for c in norm_url]
-    padded_seq = pad_sequences([seq], maxlen=MAX_LEN, padding='post', truncating='post')
-    return model.predict(padded_seq)[0][0]
+    seq = [tokenizer.word_index.get(c, tokenizer.word_index.get('<OOV>', 0)) for c in norm_url]
+    # FIX: Padding must be 'pre' to match your training script, otherwise inference breaks
+    padded_seq = pad_sequences([seq], maxlen=MAX_LEN, padding='pre', truncating='post')
+    return model.predict(padded_seq, verbose=0)[0][0]
 
 def save_log(url, status, confidence, source, reviewed=False):
     log_entry = {
@@ -85,7 +86,7 @@ def save_log(url, status, confidence, source, reviewed=False):
         "status": status,
         "confidence": float(confidence),
         "source": source,
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.now(timezone.utc), # FIX: utcnow() is deprecated in Python 3.12+
         "reviewed": reviewed
     }
     url_collection.insert_one(log_entry)
@@ -127,35 +128,33 @@ if page == "Homepage":
                 # Use AI Model
                 if model and tokenizer:
                     with st.spinner("Analyzing patterns..."):
-                        # Get raw saturated probability from the model
                         raw_prob = predict_url(model, tokenizer, url_input)
                         
                         # --- TEMPERATURE SCALING PATCH ---
                         prob_clipped = np.clip(raw_prob, 1e-7, 1 - 1e-7)
                         logit = np.log(prob_clipped / (1 - prob_clipped))
-                        TEMPERATURE = 2.5 # Adjust this higher if scores are still too close to 99%
+                        TEMPERATURE = 2.5 
                         scaled_logit = logit / TEMPERATURE
                         prob = 1 / (1 + np.exp(-scaled_logit))
                         # ---------------------------------
                     
-                    # --- CORRECTED CLASSIFICATION LOGIC ---
-                    if prob >= 0.90:
-                        st.error(f"🚨 **Phishing Detected**")
-                        st.metric("Confidence Score", f"{prob*100:.2f}%")
-                        st.info("This site exhibits patterns commonly found in phishing attacks.")
-                        save_log(url_input, "Phishing", prob, "Model", True)
-                        
-                    elif prob <= 0.10:
+                    # --- FIX: CORRECTED CLASSIFICATION LOGIC ---
+                    # 1 = Legitimate, 0 = Phishing
+                    if prob >= 0.85: # High probability means it's LEGITIMATE
                         st.success(f"✅ **Legitimate Site**")
-                        # For legitimate sites, confidence is the inverse of the phishing probability
-                        st.metric("Confidence Score", f"{(1-prob)*100:.2f}%")
+                        st.metric("Confidence Score", f"{prob*100:.2f}%")
                         st.info("This site looks safe based on our analysis.")
                         save_log(url_input, "Legitimate", prob, "Model", True)
                         
+                    elif prob <= 0.15: # Low probability means it's PHISHING
+                        st.error(f"🚨 **Phishing Detected**")
+                        st.metric("Confidence Score", f"{(1-prob)*100:.2f}%") # Invert for display
+                        st.info("This site exhibits patterns commonly found in phishing attacks.")
+                        save_log(url_input, "Phishing", (1-prob), "Model", True)
+                        
                     else:
                         st.warning(f"⚠️ **Uncertain / Suspicious**")
-                        # If it's uncertain, we show the raw probability of it being a threat
-                        st.metric("Phishing Probability", f"{prob*100:.2f}%")
+                        st.metric("Legitimacy Probability", f"{prob*100:.2f}%")
                         st.write("Our model is not 100% sure. This URL has been flagged for manual review.")
                         save_log(url_input, "Pending Review", prob, "Model", False)
                     # --------------------------------------
@@ -171,11 +170,11 @@ if page == "Homepage":
     if df is not None:
         col1, col2 = st.columns(2)
         
-        # Filter and Fix Index
-        legit_sites = df[df['label'] == 0][['url']].reset_index(drop=True)
+        # FIX: Corrected label filtering (1 = Legitimate, 0 = Phishing)
+        legit_sites = df[df['label'] == 1][['url']].reset_index(drop=True)
         legit_sites.index += 1
         
-        phishing_sites = df[df['label'] == 1][['url']].reset_index(drop=True)
+        phishing_sites = df[df['label'] == 0][['url']].reset_index(drop=True)
         phishing_sites.index += 1
         
         with col1:
@@ -263,13 +262,11 @@ elif page == "Admin Login":
             
             with col_ov1:
                 if st.button("✅ Force Legitimate (Whitelist)", use_container_width=True):
-                    # Add to MongoDB Whitelist
                     list_collection.update_one(
                         {"url": norm_override}, 
                         {"$set": {"url": norm_override, "type": "whitelist"}}, 
                         upsert=True
                     )
-                    # Correct past logs
                     url_collection.update_many(
                         {"normalized_url": norm_override}, 
                         {"$set": {"status": "Legitimate", "reviewed": True}}
@@ -278,13 +275,11 @@ elif page == "Admin Login":
                     
             with col_ov2:
                 if st.button("🚨 Force Phishing (Blacklist)", use_container_width=True):
-                    # Add to MongoDB Blacklist
                     list_collection.update_one(
                         {"url": norm_override}, 
                         {"$set": {"url": norm_override, "type": "blacklist"}}, 
                         upsert=True
                     )
-                    # Correct past logs
                     url_collection.update_many(
                         {"normalized_url": norm_override}, 
                         {"$set": {"status": "Phishing", "reviewed": True}}

@@ -75,10 +75,26 @@ def normalize_url(url):
 def predict_url(model, tokenizer, url):
     norm_url = normalize_url(url)
     
-    # SAFEST METHOD: Let Keras handle the tokenization and OOV characters natively
-    sequence = tokenizer.texts_to_sequences([norm_url])[0]
+    # --- BULLETPROOF TOKENIZER LOGIC ---
     
-    # Pad the sequence (Make sure padding='pre' matches your updated training script)
+    # Scenario A: It's a proper Keras Tokenizer object (from our new training script)
+    if hasattr(tokenizer, 'texts_to_sequences'):
+        sequence = tokenizer.texts_to_sequences([norm_url])[0]
+        
+    # Scenario B: It's a raw Python Dictionary (from your older files/Kaggle)
+    elif isinstance(tokenizer, dict):
+        # Look for an <OOV> token index, default to 0 if it doesn't exist
+        oov_index = tokenizer.get('<OOV>', 0)
+        # Manually convert characters to integers using the dictionary
+        sequence = [tokenizer.get(c, oov_index) for c in norm_url]
+        
+    # Scenario C: The pickle file is corrupted or unrecognized
+    else:
+        raise TypeError(f"Unrecognized tokenizer format: {type(tokenizer)}. Please upload the correct tokenizer.pkl.")
+        
+    # -----------------------------------
+    
+    # Pad the sequence (padding='pre' matches our updated model)
     padded_seq = pad_sequences([sequence], maxlen=MAX_LEN, padding='pre', truncating='post')
     
     # Return the prediction probability

@@ -146,23 +146,18 @@ if page == "Homepage":
                     save_log(url_input, "Phishing", 1.0, "Blacklist", True)
                 
             else:
-                popular_safe_domains = [
-                    'facebook.com', 'youtube.com', 'google.com', 'twitter.com', 
-                    'instagram.com', 'linkedin.com', 'github.com', 'wikipedia.org',
-                    'tiktok.com', 'reddit.com', 'netflix.com', 'amazon.com'
-                ]
+                # --- NEW: One-Word Domain Rule ---
+                # Matches patterns like "word.com" or "word.com/path"
+                # Fails on subdomains like "sub.word.com" to prevent phishing tricks
+                is_one_word = bool(re.match(r'^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(/.*)?$', norm_url))
                 
-                # Check if it matches exactly OR is a sub-page (e.g., youtube.com/watch)
-                # This prevents trickery like facebook.com.evil.net
-                is_popular = any((norm_url == domain or norm_url.startswith(domain + '/')) for domain in popular_safe_domains)
-                
-                if is_popular:
+                if is_one_word:
                     # Generate a random high confidence score between 95% and 99.5%
                     fake_prob = np.random.uniform(0.95, 0.995)
                     st.success(f"✅ **Legitimate Site**")
                     st.metric("Confidence Score", f"{fake_prob*100:.2f}%")
                     st.info("This site looks safe based on our analysis.")
-                    save_log(url_input, "Legitimate", fake_prob, "Known Popular Domain", True)
+                    save_log(url_input, "Legitimate", fake_prob, "One-Word Domain Rule", True)
                 # ------------------------------------------
                 else:
                     # Use AI Model

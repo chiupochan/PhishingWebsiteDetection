@@ -34,7 +34,7 @@ except Exception as e:
 # File Paths
 MODEL_PATH = 'Models/CNN-BiLSTM_best.keras'
 TOKENIZER_PATH = 'Dataset/tokenizer.pkl'
-DATA_PATH = 'Dataset/processed_data.csv' 
+DATA_PATH = 'Dataset/phishing_site_urls.csv' 
 MAX_LEN = 100 # Updated to 100 to match your final optimized training script
 
 # --- Helper Functions ---
@@ -192,10 +192,10 @@ if page == "Homepage":
         col1, col2 = st.columns(2)
         
         # FIX: Corrected label filtering (1 = Legitimate, 0 = Phishing)
-        legit_sites = df[df['label'] == 1][['url']].reset_index(drop=True)
+        legit_sites = df[df['Label'] == 'good'][['URL']].reset_index(drop=True)
         legit_sites.index += 1
         
-        phishing_sites = df[df['label'] == 0][['url']].reset_index(drop=True)
+        phishing_sites = df[df['Label'] == 'bad'][['URL']].reset_index(drop=True)
         phishing_sites.index += 1
         
         with col1:

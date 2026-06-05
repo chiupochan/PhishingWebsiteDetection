@@ -192,7 +192,7 @@ if page == "Homepage":
         col1, col2 = st.columns(2)
         
         # FIX: Corrected label filtering (1 = Legitimate, 0 = Phishing)
-        legit_sites = df[df['Label'] == 'good'][['URL']].reset_index(drop=True)
+        legit_sites = df[df['Label'] == 'good'][['URL']].iloc[100:].reset_index(drop=True)
         legit_sites.index += 1
         
         phishing_sites = df[df['Label'] == 'bad'][['URL']].reset_index(drop=True)

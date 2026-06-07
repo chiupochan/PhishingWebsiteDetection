@@ -15,11 +15,11 @@ DATA_PATH = "phishing_site_urls.csv"
 MODEL_SAVE_PATH = "cnn_bilstm_model.h5"
 TOKENIZER_SAVE_PATH = "tokenizer.pkl"
 
-MAX_LEN = 100               # Max sequence length (Table 4.3)
-EMBEDDING_DIM = 32          # Embedding dimensions (Table 4.5)
-EPOCHS = 10                 # Number of epochs (Table 4.5)
-BATCH_SIZE = 64             # Batch size (Table 4.5)
-K_FOLDS = 5                 # Stratified K-Fold splits (Table 4.5)
+MAX_LEN = 100               # Max sequence length
+EMBEDDING_DIM = 32          # Embedding dimensions 
+EPOCHS = 10                 # Number of epochs
+BATCH_SIZE = 64             # Batch size 
+K_FOLDS = 5                 # Stratified K-Fold splits 
 RANDOM_STATE = 42
 
 def clean_url(url):
@@ -51,7 +51,7 @@ def load_and_preprocess_data(filepath):
 # --- Model Builder Functions ---
 
 def build_cnn_model(vocab_size):
-    """Constructs the baseline CNN architecture (Table 4.6 & Figure 3.8)"""
+    """Constructs the baseline CNN architecture"""
     model = Sequential([
         Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=MAX_LEN),
         Conv1D(filters=64, kernel_size=3, activation='relu'),
@@ -64,7 +64,7 @@ def build_cnn_model(vocab_size):
     return model
 
 def build_lstm_model(vocab_size):
-    """Constructs the baseline LSTM architecture (Table 4.6 & Figure 3.9)"""
+    """Constructs the baseline LSTM architecture"""
     model = Sequential([
         Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=MAX_LEN),
         LSTM(64), # Optimal LSTM units
@@ -76,7 +76,7 @@ def build_lstm_model(vocab_size):
     return model
 
 def build_gru_model(vocab_size):
-    """Constructs the baseline GRU architecture (Table 4.6)"""
+    """Constructs the baseline GRU architecture"""
     model = Sequential([
         Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=MAX_LEN),
         GRU(64), # Optimal GRU units
@@ -88,7 +88,7 @@ def build_gru_model(vocab_size):
     return model
 
 def build_cnn_bilstm_model(vocab_size):
-    """Constructs the hybrid CNN-BiLSTM architecture (Table 4.6 & Figure 3.10)"""
+    """Constructs the hybrid CNN-BiLSTM architecture"""
     model = Sequential([
         Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=MAX_LEN),
         Conv1D(filters=64, kernel_size=3, activation='relu'),

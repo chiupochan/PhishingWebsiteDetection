@@ -1,298 +1,182 @@
 import numpy as np
-import os
 import pandas as pd
+import re
+import pickle
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 import tensorflow as tf
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Embedding, Conv1D, GlobalMaxPooling1D, MaxPooling1D, Dense, Dropout, LSTM, GRU, Bidirectional
-from tensorflow.keras.callbacks import EarlyStopping
-from sklearn.model_selection import StratifiedKFold, ParameterGrid
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score
-import matplotlib.pyplot as plt
-import seaborn as sns
+from tensorflow.keras.layers import Embedding, Conv1D, MaxPooling1D, GlobalMaxPooling1D, Bidirectional, LSTM, GRU, Dense, Dropout
 
-# --- Configuration & Directories ---
-MAX_LEN = 100 
-K_FOLDS = 5   
-EPOCHS = 20   
+# --- Configuration Settings ---
+DATA_PATH = "phishing_site_urls.csv"
+MODEL_SAVE_PATH = "cnn_bilstm_model.h5"
+TOKENIZER_SAVE_PATH = "tokenizer.pkl"
 
-# Output Directories
-MODELS_DIR = 'Models'
-RESULTS_DIR = 'Results'
-PLOTS_DIR = os.path.join(RESULTS_DIR, 'Plots')
-HISTORIES_DIR = os.path.join(RESULTS_DIR, 'Histories')
-REPORTS_DIR = os.path.join(RESULTS_DIR, 'Excel_Reports')
+MAX_LEN = 100               # Max sequence length (Table 4.3)
+EMBEDDING_DIM = 32          # Embedding dimensions (Table 4.5)
+EPOCHS = 10                 # Number of epochs (Table 4.5)
+BATCH_SIZE = 64             # Batch size (Table 4.5)
+K_FOLDS = 5                 # Stratified K-Fold splits (Table 4.5)
+RANDOM_STATE = 42
 
-for d in [MODELS_DIR, RESULTS_DIR, PLOTS_DIR, HISTORIES_DIR, REPORTS_DIR]:
-    os.makedirs(d, exist_ok=True)
+def clean_url(url):
+    """Normalizes URL by lowercasing and stripping common prefixes."""
+    url = str(url).lower().strip()
+    url = re.sub(r'^https?://', '', url)
+    url = re.sub(r'^www\.', '', url)
+    return url
 
-# --- Hyperparameter Grids ---
-# I added multiple values here so your "Range" column in the final report 
-# actually shows a search space (e.g., [32, 64]). 
-# Note: More values = longer training time.
-PARAM_GRIDS = {
-    "CNN": {'embedding_dim': [32], 'filters': [32, 64], 'dense_units': [64], 'dropout': [0.3, 0.5], 'batch_size': [64]},
-    "LSTM": {'embedding_dim': [32], 'lstm_units': [32, 64], 'dense_units': [64], 'dropout': [0.3, 0.5], 'batch_size': [64]},
-    "GRU": {'embedding_dim': [32], 'gru_units': [32, 64], 'dense_units': [64], 'dropout': [0.3, 0.5], 'batch_size': [64]},
-    "CNN-BiLSTM": {'embedding_dim': [32], 'filters': [64], 'lstm_units': [32, 64], 'dense_units': [64], 'dropout': [0.3, 0.5], 'batch_size': [64]}
-}
+def load_and_preprocess_data(filepath):
+    print("Loading and preprocessing dataset...")
+    df = pd.read_csv(filepath)
+    
+    # Data Cleaning: Remove nulls and duplicates
+    df.dropna(subset=['URL', 'Label'], inplace=True)
+    df.drop_duplicates(subset=['URL'], inplace=True)
+    
+    # Text Normalization
+    df['URL'] = df['URL'].apply(clean_url)
+    
+    # Label Standardization: Inversion (Phishing=1, Legitimate=0)
+    df['Label'] = df['Label'].map({'bad': 1, 'good': 0})
+    
+    # Data Shuffling
+    df = df.sample(frac=1, random_state=RANDOM_STATE).reset_index(drop=True)
+    
+    return df['URL'].values, df['Label'].values
 
-def load_data(base_dir='Dataset'):
-    print("Loading data...")
-    try:
-        X = np.load(os.path.join(base_dir, 'X_seq.npy'), allow_pickle=True)
-        y = np.load(os.path.join(base_dir, 'y.npy'), allow_pickle=True)
-        if X.shape[1] > MAX_LEN:
-            X = X[:, :MAX_LEN]
-        return X, y
-    except Exception as e:
-        print(f"Error loading data: {e}")
-        return None, None
+# --- Model Builder Functions ---
 
-def get_vocab_size(X):
-    return np.max(X) + 1
-
-# --- Model Builders ---
-def build_cnn(vocab_size, max_len, p):
+def build_cnn_model(vocab_size):
+    """Constructs the baseline CNN architecture (Table 4.6 & Figure 3.8)"""
     model = Sequential([
-        Embedding(input_dim=vocab_size, output_dim=p['embedding_dim']),
-        Conv1D(filters=p['filters'], kernel_size=5, activation='relu'),
+        Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=MAX_LEN),
+        Conv1D(filters=64, kernel_size=3, activation='relu'),
         GlobalMaxPooling1D(),
-        Dense(p['dense_units'], activation='relu'),
-        Dropout(p['dropout']),
+        Dense(64, activation='relu'),
+        Dropout(0.5), # Optimal CNN dropout
         Dense(1, activation='sigmoid')
     ])
     model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
     return model
 
-def build_lstm(vocab_size, max_len, p):
+def build_lstm_model(vocab_size):
+    """Constructs the baseline LSTM architecture (Table 4.6 & Figure 3.9)"""
     model = Sequential([
-        Embedding(input_dim=vocab_size, output_dim=p['embedding_dim']),
-        LSTM(p['lstm_units']),
-        Dense(p['dense_units'], activation='relu'),
-        Dropout(p['dropout']),
+        Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=MAX_LEN),
+        LSTM(64), # Optimal LSTM units
+        Dense(64, activation='relu'),
+        Dropout(0.3), # Optimal LSTM dropout
         Dense(1, activation='sigmoid')
     ])
     model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
     return model
 
-def build_gru(vocab_size, max_len, p):
+def build_gru_model(vocab_size):
+    """Constructs the baseline GRU architecture (Table 4.6)"""
     model = Sequential([
-        Embedding(input_dim=vocab_size, output_dim=p['embedding_dim']),
-        GRU(p['gru_units']),
-        Dense(p['dense_units'], activation='relu'),
-        Dropout(p['dropout']),
+        Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=MAX_LEN),
+        GRU(64), # Optimal GRU units
+        Dense(64, activation='relu'),
+        Dropout(0.3), # Optimal GRU dropout
         Dense(1, activation='sigmoid')
     ])
     model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
     return model
 
-def build_cnn_bilstm(vocab_size, max_len, p):
+def build_cnn_bilstm_model(vocab_size):
+    """Constructs the hybrid CNN-BiLSTM architecture (Table 4.6 & Figure 3.10)"""
     model = Sequential([
-        Embedding(input_dim=vocab_size, output_dim=p['embedding_dim']),
-        Conv1D(filters=p['filters'], kernel_size=5, activation='relu', padding='same'),
-        MaxPooling1D(pool_size=4),
-        Bidirectional(LSTM(p['lstm_units'])),
-        Dense(p['dense_units'], activation='relu'),
-        Dropout(p['dropout']),
+        Embedding(input_dim=vocab_size, output_dim=EMBEDDING_DIM, input_length=MAX_LEN),
+        Conv1D(filters=64, kernel_size=3, activation='relu'),
+        MaxPooling1D(pool_size=2),
+        Bidirectional(LSTM(32)), # Optimal CNN-BiLSTM units
+        Dense(64, activation='relu'),
+        Dropout(0.3), # Optimal CNN-BiLSTM dropout
         Dense(1, activation='sigmoid')
     ])
     model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
     return model
-
-# --- Utility Functions ---
-def plot_and_save_confusion_matrix(y_true, y_pred, title, filename):
-    cm = confusion_matrix(y_true, y_pred)
-    plt.figure(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False,
-                xticklabels=['Legitimate (0)', 'Phishing (1)'],
-                yticklabels=['Legitimate (0)', 'Phishing (1)'])
-    plt.title(title)
-    plt.xlabel('Predicted Label')
-    plt.ylabel('True Label')
-    plt.tight_layout()
-    plt.savefig(os.path.join(PLOTS_DIR, filename), dpi=300)
-    plt.close()
-
-def plot_model_comparison(df_results):
-    best_models_df = df_results.loc[df_results.groupby('Model')['Accuracy'].idxmax()]
-    melted_df = best_models_df.melt(
-        id_vars=['Model'], 
-        value_vars=['Accuracy', 'Macro_F1', 'Weighted_F1'], 
-        var_name='Metric', 
-        value_name='Score'
-    )
-    plt.figure(figsize=(10, 6))
-    sns.barplot(data=melted_df, x='Model', y='Score', hue='Metric', palette='viridis')
-    plt.title('Best Model Performance Comparison')
-    plt.ylim(0, 1.1)
-    plt.ylabel('Score')
-    plt.legend(loc='lower right', title='Metrics')
-    plt.tight_layout()
-    plt.savefig(os.path.join(PLOTS_DIR, 'model_performance_comparison.png'), dpi=300)
-    plt.close()
-
-def save_training_history(histories, model_name, param_idx):
-    avg_history = {}
-    for key in histories[0].keys():
-        min_epochs = min([len(h[key]) for h in histories])
-        avg_history[key] = np.mean([h[key][:min_epochs] for h in histories], axis=0)
-    
-    df_hist = pd.DataFrame(avg_history)
-    df_hist.index.name = 'Epoch'
-    df_hist.to_csv(os.path.join(HISTORIES_DIR, f"{model_name}_params_v{param_idx}_history.csv"))
-
-# --- Main Training Loop ---
-def train_and_evaluate_grid(builder, model_name, X, y, vocab_size, param_grid):
-    grid = list(ParameterGrid(param_grid))
-    print(f"\n{'='*50}\nStarting {model_name} ({len(grid)} configurations)\n{'='*50}")
-    
-    skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=42)
-    all_results = []
-    best_overall_acc = -1
-    best_fold_model = None
-    
-    for idx, params in enumerate(grid):
-        print(f"\n[{model_name}] Config {idx+1}: {params}")
-        
-        fold_histories, oof_y_true, oof_y_pred, oof_y_prob = [], [], [], []
-        best_fold_acc = -1
-        
-        for fold_no, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
-            print(f"  -> Fold {fold_no}/{K_FOLDS}...")
-            
-            X_train, X_val = X[train_idx], X[val_idx]
-            y_train, y_val = y[train_idx], y[val_idx]
-            
-            model = builder(vocab_size, MAX_LEN, params)
-            early_stop = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
-            
-            history = model.fit(
-                X_train, y_train, validation_data=(X_val, y_val),
-                epochs=EPOCHS, batch_size=params['batch_size'], 
-                verbose=1, callbacks=[early_stop] 
-            )
-            fold_histories.append(history.history)
-            
-            y_pred_prob = model.predict(X_val, verbose=0).flatten()
-            y_pred = (y_pred_prob > 0.5).astype(int)
-            
-            oof_y_true.extend(y_val)
-            oof_y_pred.extend(y_pred)
-            oof_y_prob.extend(y_pred_prob)
-            
-            fold_acc = accuracy_score(y_val, y_pred)
-            if fold_acc > best_fold_acc:
-                best_fold_acc = fold_acc
-                best_fold_model = model
-            
-            tf.keras.backend.clear_session()
-                
-        acc = accuracy_score(oof_y_true, oof_y_pred)
-        auc = roc_auc_score(oof_y_true, oof_y_prob)
-        
-        report_dict = classification_report(oof_y_true, oof_y_pred, target_names=['Legitimate', 'Phishing'], output_dict=True)
-        
-        macro_f1 = report_dict['macro avg']['f1-score']
-        weighted_f1 = report_dict['weighted avg']['f1-score']
-        
-        print(f"Result -> Acc: {acc:.4f} | Macro F1: {macro_f1:.4f} | Weighted F1: {weighted_f1:.4f}")
-        
-        report_df = pd.DataFrame(report_dict).transpose()
-        report_df.to_excel(os.path.join(REPORTS_DIR, f"{model_name}_config_{idx+1}_report.xlsx"))
-        
-        save_training_history(fold_histories, model_name, idx+1)
-        
-        result_row = {
-            'Model': model_name,
-            'Config_ID': idx+1,
-            'Accuracy': acc, 
-            'ROC_AUC': auc,
-            'Macro_F1': macro_f1,
-            'Weighted_F1': weighted_f1,
-            'Macro_Precision': report_dict['macro avg']['precision'],
-            'Weighted_Precision': report_dict['weighted avg']['precision'],
-            'Macro_Recall': report_dict['macro avg']['recall'],
-            'Weighted_Recall': report_dict['weighted avg']['recall'],
-            **params 
-        }
-        all_results.append(result_row)
-        
-        plot_and_save_confusion_matrix(
-            oof_y_true, oof_y_pred, 
-            f"{model_name} Confusion Matrix", 
-            f"{model_name}_config_{idx+1}_cm.png"
-        )
-        
-        if acc > best_overall_acc:
-            best_overall_acc = acc
-            if best_fold_model is not None:
-                best_fold_model.save(os.path.join(MODELS_DIR, f"{model_name}_best.h5"))
-
-    return all_results
 
 def main():
-    X, y = load_data()
-    if X is None: return
+    # 1. Load and Preprocess
+    X_raw, y = load_and_preprocess_data(DATA_PATH)
     
-    vocab_size = get_vocab_size(X)
-    print(f"Vocabulary Size: {vocab_size}")
+    # 2. Sequence Vectorization (Character-level Tokenization)
+    print("Tokenizing characters...")
+    tokenizer = Tokenizer(char_level=True, oov_token='<OOV>')
+    tokenizer.fit_on_texts(X_raw)
     
-    models = [
-        (build_cnn, "CNN", PARAM_GRIDS["CNN"]),
-        (build_lstm, "LSTM", PARAM_GRIDS["LSTM"]),
-        (build_gru, "GRU", PARAM_GRIDS["GRU"]),
-        (build_cnn_bilstm, "CNN-BiLSTM", PARAM_GRIDS["CNN-BiLSTM"])
-    ]
+    vocab_size = len(tokenizer.word_index) + 1
     
-    all_grid_results = []
+    # Convert and pad sequences (Post-padding & Post-truncating)
+    X_seq = tokenizer.texts_to_sequences(X_raw)
+    X = pad_sequences(X_seq, maxlen=MAX_LEN, padding='post', truncating='post')
     
-    for builder, name, param_grid in models:
-        try:
-            results = train_and_evaluate_grid(builder, name, X, y, vocab_size, param_grid)
-            all_grid_results.extend(results)
-        except Exception as e:
-            print(f"Error training {name}: {e}")
+    # Define models to evaluate
+    architectures = {
+        'CNN': build_cnn_model,
+        'LSTM': build_lstm_model,
+        'GRU': build_gru_model,
+        'CNN-BiLSTM': build_cnn_bilstm_model
+    }
+    
+    # 3. Stratified 5-Fold Cross-Validation for ALL models
+    skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=RANDOM_STATE)
+    
+    # Dictionary to store final averaged metrics for each architecture
+    final_results = {model_name: {'accuracy': [], 'precision': [], 'recall': [], 'f1': [], 'roc_auc': []} 
+                     for model_name in architectures.keys()}
+    
+    print(f"Starting {K_FOLDS}-Fold Stratified Cross-Validation...")
+    
+    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
+        print(f"\n--- Processing Fold {fold} ---")
+        X_train, X_val = X[train_idx], X[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
+        
+        for model_name, builder_func in architectures.items():
+            print(f"Training {model_name}...")
+            model = builder_func(vocab_size)
             
-    # --- Data Aggregation & Output Generation ---
-    if all_grid_results:
-        df_results = pd.DataFrame(all_grid_results)
-        # Sort by Macro_F1 to easily identify the top performing configurations
-        df_results = df_results.sort_values(by=['Model', 'Macro_F1'], ascending=[True, False])
-        
-        # 1. Save Master Results
-        csv_path = os.path.join(RESULTS_DIR, 'master_hyperparameter_results.csv')
-        df_results.to_csv(csv_path, index=False)
-        
-        # 2. Extract Optimal Hyperparameters and Build the Requested Table
-        best_models_df = df_results.loc[df_results.groupby('Model')['Macro_F1'].idxmax()]
-        
-        hyperparam_summary = []
-        for model_name, grid in PARAM_GRIDS.items():
-            # Get the row of the best performing config for this specific model
-            best_row = best_models_df[best_models_df['Model'] == model_name].iloc[0]
+            # Train Model
+            model.fit(X_train, y_train, 
+                      validation_data=(X_val, y_val),
+                      epochs=EPOCHS, 
+                      batch_size=BATCH_SIZE, 
+                      verbose=0) # Set to 1 if you want to see epoch progress
             
-            for param_name, param_range in grid.items():
-                hyperparam_summary.append({
-                    'Model': model_name,
-                    'Hyperparameter': param_name,
-                    'Range': str(param_range), # Formats the list (e.g., [32, 64]) cleanly into text
-                    'Optimal Value': best_row[param_name]
-                })
+            # Evaluate Model
+            y_pred_prob = model.predict(X_val, verbose=0)
+            y_pred = (y_pred_prob >= 0.5).astype(int)
+            
+            # Macro-averaged metrics
+            final_results[model_name]['accuracy'].append(accuracy_score(y_val, y_pred))
+            final_results[model_name]['precision'].append(precision_score(y_val, y_pred, average='macro'))
+            final_results[model_name]['recall'].append(recall_score(y_val, y_pred, average='macro'))
+            final_results[model_name]['f1'].append(f1_score(y_val, y_pred, average='macro'))
+            final_results[model_name]['roc_auc'].append(roc_auc_score(y_val, y_pred_prob))
+    
+    # 4. Display Comparative Cross-Validation Results
+    print("\n=== Comparative Cross-Validation Results (Averages) ===")
+    for model_name, metrics in final_results.items():
+        print(f"\n{model_name} Performance:")
+        for metric, values in metrics.items():
+            print(f"  Mean {metric.capitalize()}: {np.mean(values):.4f}")
+    
+    # 5. Train Final Global Model (CNN-BiLSTM) and Export
+    print("\nTraining final CNN-BiLSTM model on full dataset for deployment...")
+    final_model = build_cnn_bilstm_model(vocab_size)
+    final_model.fit(X, y, epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)
+    
+    final_model.save(MODEL_SAVE_PATH)
+    with open(TOKENIZER_SAVE_PATH, 'wb') as f:
+        pickle.dump(tokenizer, f)
         
-        df_hyperparams = pd.DataFrame(hyperparam_summary)
-        hyperparams_path = os.path.join(REPORTS_DIR, 'optimal_hyperparameters.xlsx')
-        df_hyperparams.to_excel(hyperparams_path, index=False)
-        
-        # 3. Create Model Comparison Bar Chart
-        plot_model_comparison(df_results)
-        
-        print("\n" + "="*50)
-        print("ALL TRAINING AND EVALUATION COMPLETE!")
-        print("="*50)
-        print(f"- Optimal Hyperparameters Table: {hyperparams_path}")
-        print(f"- Confusion Matrices & Bar Chart: {PLOTS_DIR}/")
-        print(f"- Excel Classification Reports: {REPORTS_DIR}/")
-        print(f"- Master Data CSV: {csv_path}")
+    print(f"\nDeployment assets saved:\n- Model: {MODEL_SAVE_PATH}\n- Tokenizer: {TOKENIZER_SAVE_PATH}")
 
 if __name__ == "__main__":
     main()

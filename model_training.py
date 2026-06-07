@@ -11,13 +11,13 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Embedding, Conv1D, MaxPooling1D, GlobalMaxPooling1D, Bidirectional, LSTM, GRU, Dense, Dropout
 
 # --- Configuration Settings ---
-DATA_PATH = "phishing_site_urls.csv"
-MODEL_SAVE_PATH = "cnn_bilstm_model.h5"
+DATA_PATH = "Dataset/phishing_site_urls.csv"
+MODEL_SAVE_PATH = "Models/CNN-BiLSTM_best.keras"
 TOKENIZER_SAVE_PATH = "tokenizer.pkl"
 
 MAX_LEN = 100               # Max sequence length
 EMBEDDING_DIM = 32          # Embedding dimensions 
-EPOCHS = 10                 # Number of epochs
+EPOCHS = 20                 # Number of epochs
 BATCH_SIZE = 64             # Batch size 
 K_FOLDS = 5                 # Stratified K-Fold splits 
 RANDOM_STATE = 42

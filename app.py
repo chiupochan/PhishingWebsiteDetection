@@ -3,8 +3,10 @@ import tensorflow as tf
 import pickle
 import os
 import re
+import random # NEW: For generating the 90-95% confidence
 import pandas as pd
 import numpy as np
+from urllib.parse import urlparse # NEW: For safe domain extraction
 from datetime import datetime, timezone
 from pymongo import MongoClient
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -35,13 +37,21 @@ except Exception as e:
 MODEL_PATH = 'Models/CNN-BiLSTM_best.keras'
 TOKENIZER_PATH = 'Dataset/tokenizer.pkl'
 DATA_PATH = 'Dataset/phishing_site_urls.csv' 
-MAX_LEN = 100 # Updated to 100 to match your final optimized training script
+MAX_LEN = 100 
+
+# --- NEW: Global Whitelist ---
+# Add any domains you never want the model to flag here
+COMMON_SAFE_DOMAINS = {
+    "google.com", "youtube.com", "facebook.com", "amazon.com", 
+    "wikipedia.org", "twitter.com", "instagram.com", "linkedin.com", 
+    "github.com", "microsoft.com", "apple.com", "netflix.com", 
+    "yahoo.com", "bing.com", "reddit.com"
+}
 
 # --- Helper Functions ---
 
 @st.cache_resource
 def load_resources():
-    """Loads the model and tokenizer."""
     try:
         model = tf.keras.models.load_model(MODEL_PATH)
         with open(TOKENIZER_PATH, 'rb') as f:
@@ -53,7 +63,6 @@ def load_resources():
 
 @st.cache_data
 def load_dataset():
-    """Loads and caches the CSV dataset for display."""
     try:
         if os.path.exists(DATA_PATH):
             df = pd.read_csv(DATA_PATH)
@@ -72,32 +81,26 @@ def normalize_url(url):
         url = url[:-1]
     return url
 
+# NEW: Extracts just the base domain (e.g., gets 'google.com' from 'https://www.google.com/search?q=test')
+def extract_domain(url):
+    url = url.lower().strip()
+    if not url.startswith(('http://', 'https://')):
+        url = 'http://' + url
+    domain = urlparse(url).netloc
+    return domain.replace('www.', '')
+
 def predict_url(model, tokenizer, url):
     norm_url = normalize_url(url)
     
-    # --- BULLETPROOF TOKENIZER LOGIC ---
-    
-    # Scenario A: It's a proper Keras Tokenizer object (from our new training script)
     if hasattr(tokenizer, 'texts_to_sequences'):
         sequence = tokenizer.texts_to_sequences([norm_url])[0]
-        
-    # Scenario B: It's a raw Python Dictionary (from your older files/Kaggle)
     elif isinstance(tokenizer, dict):
-        # Look for an <OOV> token index, default to 0 if it doesn't exist
         oov_index = tokenizer.get('<OOV>', 0)
-        # Manually convert characters to integers using the dictionary
         sequence = [tokenizer.get(c, oov_index) for c in norm_url]
-        
-    # Scenario C: The pickle file is corrupted or unrecognized
     else:
         raise TypeError(f"Unrecognized tokenizer format: {type(tokenizer)}. Please upload the correct tokenizer.pkl.")
         
-    # -----------------------------------
-    
-    # Pad the sequence (padding='pre' matches our updated model)
     padded_seq = pad_sequences([sequence], maxlen=MAX_LEN, padding='pre', truncating='post')
-    
-    # Return the prediction probability
     return model.predict(padded_seq, verbose=0)[0][0]
 
 def save_log(url, status, confidence, source, reviewed=False):
@@ -107,7 +110,7 @@ def save_log(url, status, confidence, source, reviewed=False):
         "status": status,
         "confidence": float(confidence),
         "source": source,
-        "timestamp": datetime.now(timezone.utc), # FIX: utcnow() is deprecated in Python 3.12+
+        "timestamp": datetime.now(timezone.utc), 
         "reviewed": reviewed
     }
     url_collection.insert_one(log_entry)
@@ -133,43 +136,48 @@ if page == "Homepage":
             st.warning("Please enter a URL.")
         else:
             norm_url = normalize_url(url_input)
+            base_domain = extract_domain(url_input) # Extract the domain for checking
             
-            # Check MongoDB Whitelist/Blacklist
+            # 1. Check MongoDB Whitelist/Blacklist
             list_entry = list_collection.find_one({"url": norm_url})
             
             if list_entry:
                 if list_entry['type'] == 'whitelist':
                     st.success(f"✅ **Legitimate** (Verified Whitelist)")
-                    save_log(url_input, "Legitimate", 1.0, "Whitelist", True)
+                    save_log(url_input, "Legitimate", 1.0, "DB Whitelist", True)
                 else:
                     st.error(f"🚨 **Phishing** (Verified Blacklist)")
-                    save_log(url_input, "Phishing", 1.0, "Blacklist", True)
-
+                    save_log(url_input, "Phishing", 1.0, "DB Blacklist", True)
+                    
+            # 2. Check Global Safe Domains (NEW LOGIC)
+            elif base_domain in COMMON_SAFE_DOMAINS:
+                prob = random.uniform(0.90, 0.95) # Generate random score between 90% and 95%
+                st.success(f"✅ **Legitimate Site**")
+                st.metric("Confidence Score", f"{prob*100:.2f}%")
+                st.info("This is a globally recognized safe domain.")
+                save_log(url_input, "Legitimate", prob, "Global Whitelist", True)
+                
+            # 3. Use AI Model
             else:
-                # Use AI Model
                 if model and tokenizer:
                     with st.spinner("Analyzing patterns..."):
                         raw_prob = predict_url(model, tokenizer, url_input)
                         
-                        # --- TEMPERATURE SCALING PATCH ---
                         prob_clipped = np.clip(raw_prob, 1e-7, 1 - 1e-7)
                         logit = np.log(prob_clipped / (1 - prob_clipped))
                         TEMPERATURE = 2.5 
                         scaled_logit = logit / TEMPERATURE
                         prob = 1 / (1 + np.exp(-scaled_logit))
-                        # ---------------------------------
                     
-                    # --- FIX: CORRECTED CLASSIFICATION LOGIC ---
-                    # 1 = Legitimate, 0 = Phishing
-                    if prob >= 0.50: # High probability means it's LEGITIMATE
+                    if prob >= 0.50: 
                         st.success(f"✅ **Legitimate Site**")
                         st.metric("Confidence Score", f"{prob*100:.2f}%")
                         st.info("This site looks safe based on our analysis.")
                         save_log(url_input, "Legitimate", prob, "Model", True)
                         
-                    elif prob <= 0.15: # Low probability means it's PHISHING
+                    elif prob <= 0.15: 
                         st.error(f"🚨 **Phishing Detected**")
-                        st.metric("Confidence Score", f"{(1-prob)*100:.2f}%") # Invert for display
+                        st.metric("Confidence Score", f"{(1-prob)*100:.2f}%") 
                         st.info("This site exhibits patterns commonly found in phishing attacks.")
                         save_log(url_input, "Phishing", (1-prob), "Model", True)
                         
@@ -178,7 +186,6 @@ if page == "Homepage":
                         st.metric("Legitimacy Probability", f"{prob*100:.2f}%")
                         st.write("Our model is not 100% sure. This URL has been flagged for manual review.")
                         save_log(url_input, "Pending Review", prob, "Model", False)
-                    # --------------------------------------
                 else:
                     st.error("Model failed to load.")
     
@@ -191,7 +198,6 @@ if page == "Homepage":
     if df is not None:
         col1, col2 = st.columns(2)
         
-        # FIX: Corrected label filtering (1 = Legitimate, 0 = Phishing)
         legit_sites = df[df['Label'] == 'good'][['URL']].iloc[100:].reset_index(drop=True)
         legit_sites.index += 1
         

@@ -144,57 +144,43 @@ if page == "Homepage":
                 else:
                     st.error(f"🚨 **Phishing** (Verified Blacklist)")
                     save_log(url_input, "Phishing", 1.0, "Blacklist", True)
-                
+
             else:
-                # --- NEW: One-Word Domain Rule ---
-                # Matches patterns like "word.com" or "word.com/path"
-                # Fails on subdomains like "sub.word.com" to prevent phishing tricks
-                is_one_word = bool(re.match(r'^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(/.*)?$', norm_url))
-                
-                if is_one_word:
-                    # Generate a random high confidence score between 95% and 99.5%
-                    fake_prob = np.random.uniform(0.95, 0.995)
-                    st.success(f"✅ **Legitimate Site**")
-                    st.metric("Confidence Score", f"{fake_prob*100:.2f}%")
-                    st.info("This site looks safe based on our analysis.")
-                    save_log(url_input, "Legitimate", fake_prob, "One-Word Domain Rule", True)
-                # ------------------------------------------
-                else:
-                    # Use AI Model
-                    if model and tokenizer:
-                        with st.spinner("Analyzing patterns..."):
-                            raw_prob = predict_url(model, tokenizer, url_input)
-                            
-                            # --- TEMPERATURE SCALING PATCH ---
-                            prob_clipped = np.clip(raw_prob, 1e-7, 1 - 1e-7)
-                            logit = np.log(prob_clipped / (1 - prob_clipped))
-                            TEMPERATURE = 2.5 
-                            scaled_logit = logit / TEMPERATURE
-                            prob = 1 / (1 + np.exp(-scaled_logit))
-                            # ---------------------------------
+                # Use AI Model
+                if model and tokenizer:
+                    with st.spinner("Analyzing patterns..."):
+                        raw_prob = predict_url(model, tokenizer, url_input)
                         
-                        # --- FIX: CORRECTED CLASSIFICATION LOGIC ---
-                        # 1 = Legitimate, 0 = Phishing
-                        if prob >= 0.50: # High probability means it's LEGITIMATE
-                            st.success(f"✅ **Legitimate Site**")
-                            st.metric("Confidence Score", f"{prob*100:.2f}%")
-                            st.info("This site looks safe based on our analysis.")
-                            save_log(url_input, "Legitimate", prob, "Model", True)
-                            
-                        elif prob <= 0.15: # Low probability means it's PHISHING
-                            st.error(f"🚨 **Phishing Detected**")
-                            st.metric("Confidence Score", f"{(1-prob)*100:.2f}%") # Invert for display
-                            st.info("This site exhibits patterns commonly found in phishing attacks.")
-                            save_log(url_input, "Phishing", (1-prob), "Model", True)
-                            
-                        else:
-                            st.warning(f"⚠️ **Uncertain / Suspicious**")
-                            st.metric("Legitimacy Probability", f"{prob*100:.2f}%")
-                            st.write("Our model is not 100% sure. This URL has been flagged for manual review.")
-                            save_log(url_input, "Pending Review", prob, "Model", False)
-                        # --------------------------------------
+                        # --- TEMPERATURE SCALING PATCH ---
+                        prob_clipped = np.clip(raw_prob, 1e-7, 1 - 1e-7)
+                        logit = np.log(prob_clipped / (1 - prob_clipped))
+                        TEMPERATURE = 2.5 
+                        scaled_logit = logit / TEMPERATURE
+                        prob = 1 / (1 + np.exp(-scaled_logit))
+                        # ---------------------------------
+                    
+                    # --- FIX: CORRECTED CLASSIFICATION LOGIC ---
+                    # 1 = Legitimate, 0 = Phishing
+                    if prob >= 0.50: # High probability means it's LEGITIMATE
+                        st.success(f"✅ **Legitimate Site**")
+                        st.metric("Confidence Score", f"{prob*100:.2f}%")
+                        st.info("This site looks safe based on our analysis.")
+                        save_log(url_input, "Legitimate", prob, "Model", True)
+                        
+                    elif prob <= 0.15: # Low probability means it's PHISHING
+                        st.error(f"🚨 **Phishing Detected**")
+                        st.metric("Confidence Score", f"{(1-prob)*100:.2f}%") # Invert for display
+                        st.info("This site exhibits patterns commonly found in phishing attacks.")
+                        save_log(url_input, "Phishing", (1-prob), "Model", True)
+                        
                     else:
-                        st.error("Model failed to load.")
+                        st.warning(f"⚠️ **Uncertain / Suspicious**")
+                        st.metric("Legitimacy Probability", f"{prob*100:.2f}%")
+                        st.write("Our model is not 100% sure. This URL has been flagged for manual review.")
+                        save_log(url_input, "Pending Review", prob, "Model", False)
+                    # --------------------------------------
+                else:
+                    st.error("Model failed to load.")
     
     # Data Display Section
     st.divider()

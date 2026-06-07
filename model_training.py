@@ -13,7 +13,7 @@ import seaborn as sns
 # --- Configuration & Directories ---
 MAX_LEN = 100 
 K_FOLDS = 5   
-EPOCHS = 10   
+EPOCHS = 20   
 
 # Output Directories
 MODELS_DIR = 'Models'

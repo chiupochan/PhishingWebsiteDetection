@@ -77,3 +77,6 @@ Start the Streamlit server using the standard Streamlit execution command. Navig
 * Bachelor of Computer Science with Honours (Information Systems)
 * Faculty of Computer Science and Information Technology, Universiti Malaysia Sarawak (UNIMAS)
 * Year: 2026
+
+## The Confidence Score 
+* The confidence score of the model is ranged from 0% to 100%, the closer it is to 0% the more likely it is phishing, the closer to 100% the more likely it is legitimate.
